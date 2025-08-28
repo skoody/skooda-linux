@@ -45,17 +45,17 @@ extern irq_handler   ; C-level handler for hardware interrupts
 ; This common stub is called by all CPU exception ISRs.
 isr_common_stub:
     pushad      ; Pushes edi,esi,ebp,esp,ebx,edx,ecx,eax
-
     mov ax, ds  ; Lower 16-bits of eax = ds.
     push eax    ; save the data segment descriptor
-
     mov ax, 0x10 ; Load the kernel data segment descriptor
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
 
+    push esp    ; Push a pointer to the registers_t struct
     call fault_handler
+    pop esp     ; Clean up stack
 
     pop ebx     ; Pop the saved data segment descriptor
     mov ds, bx
@@ -70,17 +70,17 @@ isr_common_stub:
 ; This common stub is called by all hardware IRQ handlers.
 irq_common_stub:
     pushad
-
     mov ax, ds
     push eax
-
     mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
 
+    push esp    ; Push a pointer to the registers_t struct
     call irq_handler
+    pop esp     ; Clean up stack
 
     pop ebx
     mov ds, bx
