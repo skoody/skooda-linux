@@ -1,113 +1,58 @@
 ; =============================================================================
-; A simple 16-bit bootloader for our OS.
+; boot.asm: A 512-byte Stage 1 bootloader.
 ;
-; - Sets up basic segment registers.
-; - Initializes the COM1 serial port for output.
-; - Prints a message to the VGA display (screen).
-; - Prints the same message to the serial port (for verification).
-; - Halts the CPU.
+; This bootloader's only job is to load the kernel from the disk
+; into memory at 0x100000 and then jump to it.
 ; =============================================================================
 
-[org 0x7c00]    ; The BIOS loads us at this address.
+bits 16
+[org 0x7c00]
 
-; --- Entry Point ---
+; --- Constants ---
+KERNEL_LOAD_ADDR equ 0x8000 ; Address to load the kernel to.
+KERNEL_SECTORS_TO_READ equ 10  ; Number of sectors for the kernel
+
 start:
-    ; Set up segment registers. BIOS guarantees CS=0, IP=0x7c00.
-    ; We'll set DS and ES to 0 as well for a flat memory model.
-    xor ax, ax
-    mov ds, ax
-    mov es, ax
+    mov si, msg_loading
+    call print_string
 
-    ; Initialize the serial port (COM1) for logging.
-    ; This is how we'll verify execution in QEMU.
-    call init_serial
+    ; Use legacy BIOS read (int 13h, ah=02h) to load our kernel.
+    ; This is often more reliable in emulators than the extended read.
+    mov ah, 0x02
+    mov al, KERNEL_SECTORS_TO_READ
+    mov ch, 0 ; Cylinder 0
+    mov cl, 2 ; Start at Sector 2 (1 is the boot sector)
+    mov dh, 0 ; Head 0
+    ; DL = boot drive (already set by BIOS)
+    ; ES:BX is the destination buffer. ES is already 0.
+    mov bx, KERNEL_LOAD_ADDR ; Load to 0x0000:0x8000
+    int 0x13
+    jc load_error
 
-    ; Print our welcome message to the screen.
-    mov si, msg_hello
-    call print_string_vga
+    ; If loading was successful, jump to the kernel's load address
+    jmp KERNEL_LOAD_ADDR
 
-    ; Print our welcome message to the serial port.
-    mov si, msg_hello
-    call print_string_serial
-
-    ; Hang the system.
-hang:
-    jmp hang
-
-
-; --- Subroutines ---
-
-; Initializes COM1 serial port at 0x3f8.
-init_serial:
-    mov dx, 0x3f8 + 1  ; Interrupt Enable Register
-    mov al, 0x00       ; Disable all interrupts
-    out dx, al
-    mov dx, 0x3f8 + 3  ; Line Control Register
-    mov al, 0x80       ; Enable DLAB (to set baud rate)
-    out dx, al
-    mov dx, 0x3f8 + 0  ; Divisor Latch Low Byte
-    mov al, 12         ; Set baud rate to 9600 (115200 / 12)
-    out dx, al
-    mov dx, 0x3f8 + 1  ; Divisor Latch High Byte
-    mov al, 0x00
-    out dx, al
-    mov dx, 0x3f8 + 3  ; Line Control Register
-    mov al, 0x03       ; 8 bits, no parity, one stop bit (8N1)
-    out dx, al
-    ret
-
-; Prints a null-terminated string from SI to the VGA display.
-print_string_vga:
-    mov ah, 0x0e       ; BIOS teletype function
+; Prints a null-terminated string using BIOS int 10h
+print_string:
+    mov ah, 0x0e
 .loop:
-    lodsb              ; Load character from [SI] into AL, then increment SI
-    cmp al, 0          ; Check for null terminator
+    lodsb
+    cmp al, 0
     je .done
-    int 0x10           ; Call BIOS video interrupt to print the character
+    int 0x10
     jmp .loop
 .done:
     ret
 
-; Prints a null-terminated string from SI to the serial port.
-print_string_serial:
-.loop:
-    lodsb              ; Load character from [SI] into AL, then increment SI
-    cmp al, 0          ; Check for null terminator
-    je .done
-    call print_char_serial ; Print the character
-    jmp .loop
-.done:
-    ret
-
-; Transmits a single character from AL over the serial port.
-; NOTE: Preserves AX on the stack because the character is in AL.
-print_char_serial:
-    push ax            ; Save AX (which contains our character in AL) onto the stack.
-
-    mov dx, 0x3f8 + 5  ; Line Status Register
-.wait:
-    in al, dx          ; Read status into AL. This overwrites our char, but it's saved.
-    and al, 0x20       ; Check if the transmitter holding register is empty.
-    jz .wait           ; Loop until the serial port is ready.
-
-    pop ax             ; Restore our original character from the stack back into AX.
-    mov dx, 0x3f8      ; Data Register
-    out dx, al         ; Send the character.
-    ret
-
+load_error:
+    mov si, msg_failed
+    call print_string
+    jmp $ ; Hang forever
 
 ; --- Data ---
+msg_loading db "Loading kernel...", 0x0d, 0x0a, 0
+msg_failed db "Kernel load failed!", 0x0d, 0x0a, 0
 
-msg_hello:
-    db "Hello from our new OS!", 0x0d, 0x0a, 0  ; Message, carriage return, newline, null terminator.
-
-
-; --- Bootloader Signature ---
-
-; Pad the rest of the file with zeros to make it 512 bytes long.
-; `$` is the current address, `$$` is the starting address (0x7c00).
-; `($-$$)` calculates the size of the code and data so far.
+; --- Padding and Magic Number ---
 times 510 - ($ - $$) db 0
-
-; The boot signature must be the last two bytes.
 dw 0xaa55
